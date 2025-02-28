@@ -13,96 +13,122 @@
 
 using namespace std;
 
+// Define the dimensions of the neuron grid
 #define Neuron_width 4
 #define Neuron_height 5
 
+// Calculate the total number of neurons in one layer
 #define Neuron_layer (int)(Neuron_width * Neuron_height)
+// Calculate the total number of neurons including all layers
 #define Neuron_count (int)(1 + 3 * (Neuron_width * Neuron_height))
 
+// Define the number of equations per neuron (Hodgkin-Huxley model has 4 equations)
 #define Equations_per_neuron 4
 
+// Calculate the total number of equations for all neurons
 #define Neuron_equations_count Equations_per_neuron * Neuron_count
 #define Equations_count Neuron_equations_count
 
-double *f;
-double *f_diff;
+// Global variables for the state of the system
+double *f; // Array to store the current state of the system (V, m, n, h for each neuron)
+double *f_diff; // Array to store the differences in the state variables
 
-double **k;
-double *phi_k1;
-double *phi_k2;
-double *phi_k3;
+// Arrays for Runge-Kutta method
+double **k; // Array to store intermediate values for Runge-Kutta method
+double *phi_k1; // Intermediate state for Runge-Kutta method
+double *phi_k2; // Intermediate state for Runge-Kutta method
+double *phi_k3; // Intermediate state for Runge-Kutta method
 
+// Flags for file writing and OpenMP parallelization
 bool write_file = false;
 bool omp_enable = false;
 
+// Buffer for synaptic currents
 double I_syn_buffer[Neuron_count];
 
+// Parameters for synaptic conductances
 double g_syn_RN_param;
 double g_syn_SN_param;
 double g_syn_IN_param;
 double g_syn_CN_param;
 
+// Parameters for applied currents
 double I_app_RN_param;
 double I_app_SN_param;
 double I_app_IN_param;
 double I_app_CN_param;
 
-// https://neuronaldynamics.epfl.ch/online/Ch2.S2.html
-double C_m = 1;	  // muF/cm^2
-double g_K = 35;  // mS/cm^2
-double g_Na = 40; // mS/cm^2
-double g_L = 0.3; // mS/cm^2
-double E_K = -77; // mV
-double E_Na = 55; // mV
-double E_L = -65; // mV
+// Hodgkin-Huxley model parameters
+double C_m = 1;	  // Membrane capacitance (muF/cm^2)
+double g_K = 35;  // Potassium conductance (mS/cm^2)
+double g_Na = 40; // Sodium conductance (mS/cm^2)
+double g_L = 0.3; // Leak conductance (mS/cm^2)
+double E_K = -77; // Potassium reversal potential (mV)
+double E_Na = 55; // Sodium reversal potential (mV)
+double E_L = -65; // Leak reversal potential (mV)
 
+// Rewiring and inhibition probabilities
 double p_rewir;
 double p_inhib;
 
+// Range for applied current
 double I_app_min;
 double I_app_max;
 
-double *g_syn;
-double k_syn = 0.2;
-double *E_syn;
+// Arrays for synaptic conductances and reversal potentials
+double *g_syn; // Synaptic conductance for each neuron
+double k_syn = 0.2; // Synaptic strength parameter
+double *E_syn; // Synaptic reversal potential for each neuron
 
+// Array for applied current
 double *I_app;
 
-double **N_A;
-double **N_B;
-double *N_C;
+// Matrices for neuron connectivity and synaptic properties
+double **N_A; // Adjacency matrix for neuron connections
+double **N_B; // List of input neurons for each neuron
+double *N_C; // Number of inputs for each neuron
 
-list<double> *V_spikes;
-list<double> *V_spikes_Freq;
+// Lists to store spike times and frequencies
+list<double> *V_spikes; // List to store spike times for each neuron
+list<double> *V_spikes_Freq; // List to store spike frequencies for each neuron
 
+// File pointer for synaptic currents
 FILE *fp_I_syn;
 
-double *Meander_start_from_zero;
-double *Meander_width;
-double *Meander_height;
-double *Meander_interval;
-int *Meander_count;
+// Arrays for meander (stimulus) parameters
+double *Meander_start_from_zero; // Start time for meander stimulus
+double *Meander_width; // Width of the meander stimulus
+double *Meander_height; // Height of the meander stimulus
+double *Meander_interval; // Interval between meander stimuli
+int *Meander_count; // Number of meander stimuli
 
+// Constants for meander stimulus
 const double Offset = 0.00;
 const double Duration = 1000.0;
 const double Interval = 100.0;
 const double Magnitude = 0.0;
 const int Count = 1000;
 
+// Simulation time parameters
 const double t_start = 0;
-const double t_max = 10.0; // 100 msec = 0.1 sec
-const double dt = 0.00005; // 0.01 msec = 0.00001 sec; 0.1 msec = 0.0001 sec; 1 msec = 0.001 sec
+const double t_max = 10.0; // Simulation end time (100 msec = 0.1 sec)
+const double dt = 0.00005; // Time step (0.01 msec = 0.00001 sec; 0.1 msec = 0.0001 sec; 1 msec = 0.001 sec)
 
-double **tau;
-double** E_syn_matrix;
+// Arrays for synaptic delays and reversal potentials
+double **tau; // Matrix for synaptic delays
+double** E_syn_matrix; // Matrix for synaptic reversal potentials
 
-#define tau_lag 20 // ms
+// Synaptic delay parameters
+#define tau_lag 20 // Synaptic delay in milliseconds
 
+// Conversion factor from milliseconds to simulation steps
 #define ms_to_step (int)(0.001 / dt) // (0.001 / dt) !!! Don't forget !!!
 
+// Maximum delay in simulation steps
 #define Max_delay (int)(tau_lag * ms_to_step)
-double **V_old_array;
+double **V_old_array; // Array to store past membrane potentials for delayed synapses
 
+// Function to return the sign of a value
 int sign(int value)
 {
 	if (value >= 0)
@@ -113,8 +139,7 @@ int sign(int value)
 	//return 0;
 }
 
-// bool thread_count_printed = false;
-
+// Function to calculate the stimulus current at time t for neuron i
 double I_stim(int i, double t)
 {
 	if (t < Meander_start_from_zero[i])
@@ -131,6 +156,7 @@ double I_stim(int i, double t)
 	return t < Meander_width[i] ? Meander_height[i] : 0;
 }
 
+// Functions to get and set the membrane potential (V) for neuron i
 double V(int i)
 {
 	return f[i * Equations_per_neuron];
@@ -141,6 +167,7 @@ void SetV(int i, double value)
 	f[i * Equations_per_neuron] = value;
 }
 
+// Functions to get and set the m gate variable for neuron i
 double m(int i)
 {
 	return f[i * Equations_per_neuron + 1];
@@ -151,6 +178,7 @@ void Setm(int i, double value)
 	f[i * Equations_per_neuron + 1] = value;
 }
 
+// Functions to get and set the n gate variable for neuron i
 double n(int i)
 {
 	return f[i * Equations_per_neuron + 2];
@@ -161,6 +189,7 @@ void Setn(int i, double value)
 	f[i * Equations_per_neuron + 2] = value;
 }
 
+// Functions to get and set the h gate variable for neuron i
 double h(int i)
 {
 	return f[i * Equations_per_neuron + 3];
@@ -171,8 +200,7 @@ void Seth(int i, double value)
 	f[i * Equations_per_neuron + 3] = value;
 }
 
-///
-
+// Function to get the membrane potential at a previous time step (for delayed synapses)
 double V_old(int i, int delay)
 {
 	if (delay == 0)
@@ -181,16 +209,19 @@ double V_old(int i, int delay)
 	return V_old_array[i][Max_delay - delay];
 }
 
+// Function to generate a random integer between min and max
 int RandomI(int min, int max)
 {
 	return ((double)rand() / (RAND_MAX - 1)) * (max - min) + min;
 }
 
+// Function to generate a random double between min and max
 double RandomD(double min, double max)
 {
 	return ((double)rand() / RAND_MAX) * (max - min) + min;
 }
 
+// Functions to calculate the rate constants for the Hodgkin-Huxley model
 double alpha_m(double *f, int i)
 {
 	return 0.182 * (V(i) + 35) / (1 - exp(-(V(i) + 35) / 9));
@@ -221,8 +252,7 @@ double beta_h(double *f, int i)
 	return 0.25 * exp((V(i) + 62) / 6) / exp((V(i) + 90) / 12);
 }
 
-//
-
+// Function to calculate the Hodgkin-Huxley equations for neuron i
 double HodgkinHuxley(int i, double *f, double t)
 {
 	int in = i / Equations_per_neuron;
@@ -234,29 +264,34 @@ double HodgkinHuxley(int i, double *f, double t)
 		{
 			double I_syn = 0;
 
+			// Calculate the synaptic current from all connected neurons
 			for (int j = 0; j < N_C[in]; j++)
 			{
 				int input = N_B[in][j];
-				I_syn += g_syn[input] * (E_syn_matrix[input][in] - V(in)) / (1 + exp(-(V_old(input, tau[input][in]) / k_syn)));
+				I_syn += g_syn[input] * (E_syn_matrix[input][in] - V(in)) / (1 + exp(-(V_old(input, tau[input][in]) / k_syn));
 			}
 
 			I_syn_buffer[in] = I_syn;
 
+			// Return the change in membrane potential (V)
 			return 1000 * ((g_Na * pow(m(in), 3) * h(in) * (E_Na - V(in)) + g_K * n(in) * (E_K - V(in)) + g_L * (E_L - V(in)) + I_app[in] + I_syn + I_stim(in, t)) / C_m); // V
 		}
 
 		case 1: // m
 		{
+			// Return the change in the m gate variable
 			return 1000 * (alpha_m(f, in) * (1 - m(in)) - beta_m(f, in) * m(in)); // m
 		}
 
 		case 2: // n
 		{
+			// Return the change in the n gate variable
 			return 1000 * (alpha_n(f, in) * (1 - n(in)) - beta_n(f, in) * n(in)); // n
 		}
 
 		case 3: // h
 		{
+			// Return the change in the h gate variable
 			return 1000 * (alpha_h(f, in) * (1 - h(in)) - beta_h(f, in) * h(in)); // h
 		}
 	}
@@ -264,6 +299,7 @@ double HodgkinHuxley(int i, double *f, double t)
 	return 0;
 }
 
+// Function to perform the Euler integration method
 void Euler(double t, double dt, double *f, double *f_next)
 {
 	#pragma omp parallel for
@@ -273,17 +309,13 @@ void Euler(double t, double dt, double *f, double *f_next)
 	}
 }
 
+// Function to perform the Runge-Kutta integration method
 void RungeKutta(double t, double dt, double *f, double *f_next)
 {
 	#pragma omp parallel for
 	for (int i = 0; i < Equations_count; i++)
 	{
-		// if (!thread_count_printed)
-		//{
-		//	thread_count_printed = true;
-		//	printf("Threads = %d\n", omp_get_num_threads());
-		// }
-
+		// Calculate intermediate values for Runge-Kutta method
 		k[i][0] = HodgkinHuxley(i, f, t) * dt;
 		phi_k1[i] = f[i] + k[i][0] / 2;
 		k[i][1] = HodgkinHuxley(i, phi_k1, t) * dt;
@@ -292,16 +324,19 @@ void RungeKutta(double t, double dt, double *f, double *f_next)
 		phi_k3[i] = f[i] + k[i][2] / 2;
 		k[i][3] = HodgkinHuxley(i, phi_k3, t) * dt;
 
+		// Update the state variables using the Runge-Kutta method
 		f_next[i] = f[i] + (k[i][0] + 2 * k[i][1] + 2 * k[i][2] + k[i][3]) / 6;
 	}
 }
 
+// Function to copy an array from source to target
 void CopyArray(double *source, double *target, int N)
 {
 	for (int i = 0; i < N; i++)
 		target[i] = source[i];
 }
 
+// Function to check if two values are approximately equal
 bool Approximately(double a, double b)
 {
 	if (a < 0)
@@ -313,12 +348,13 @@ bool Approximately(double a, double b)
 	return a - b <= 0.000001;
 }
 
-// http://preshing.com/20111007/how-to-generate-random-timings-for-a-poisson-process/
+// Function to generate the next time for a Poisson process
 double nextTime(double rateParameter)
 {
 	return -log(1.0 - (double)rand() / (RAND_MAX)) / rateParameter;
 }
 
+// Function to generate meander (stimulus) parameters
 void GenerateMeander()
 {
 	for (int i = 0; i < Neuron_count; i++)
@@ -342,6 +378,7 @@ void GenerateMeander()
 	}
 }
 
+// Function to fill the connectivity matrix with zeros
 void FillMatrixZero()
 {
 	for (int i = 0; i < Neuron_count; i++)
@@ -354,6 +391,7 @@ void FillMatrixZero()
 	}
 }
 
+// Function to fill the input neuron lists for each neuron
 void Fill_N_BCMatrix()
 {
 	for (int i = 0; i < Neuron_count; i++)
@@ -373,11 +411,13 @@ void Fill_N_BCMatrix()
 	}
 }
 
+// Function to check if two neurons are on the same line
 bool CheckNeuronSameLine(int i, int j)
 {
 	return i / Neuron_width == j / Neuron_width;
 }
 
+// Function to check if two neurons are neighbors
 bool IsNeuronWireNeighbors(int i, int j)
 {
 	if (CheckNeuronSameLine(i, j) && (i == j - 1 || i == j + 1))
@@ -389,6 +429,7 @@ bool IsNeuronWireNeighbors(int i, int j)
 	return false;
 }
 
+// Function to fill the neuron connectivity matrix
 void FillNeuronMatrix()
 {
 	// 0
@@ -414,6 +455,7 @@ void FillNeuronMatrix()
 	}
 }
 
+// Function to fill the synaptic conductance array
 void FillgsynArray()
 {
 	// 0
@@ -442,6 +484,7 @@ void FillgsynArray()
 	}
 }
 
+// Function to fill the applied current array
 void FillIappArray()
 {
 	// 0
@@ -470,6 +513,7 @@ void FillIappArray()
 	}
 }
 
+// Function to fill the synaptic reversal potential matrix
 void FillEsynMatrix()
 {
 	// 0
@@ -548,6 +592,7 @@ void FillEsynMatrix()
 	}
 }
 
+// Function to fill the V_old_array with current membrane potentials
 void FillVOldFromCurrent()
 {
 	if (Max_delay == 0)
@@ -559,6 +604,7 @@ void FillVOldFromCurrent()
 			V_old_array[i][j] = -60;
 }
 
+// Function to update the V_old_array with new membrane potentials
 void UpdateVOld()
 {
 	if (Max_delay == 0)
@@ -572,7 +618,8 @@ void UpdateVOld()
 		V_old_array[i][Max_delay - 1] = V(i);
 	}
 }
-//
+
+// Function to fill the tau matrix with synaptic delays
 void FillTauMatrix()
 {
 	for (int i = 0; i < Neuron_count; i++)
@@ -590,6 +637,7 @@ void FillTauMatrix()
 	}
 }
 
+// Main function
 int main(int argc, char *argv[])
 {
     int write = 0;
